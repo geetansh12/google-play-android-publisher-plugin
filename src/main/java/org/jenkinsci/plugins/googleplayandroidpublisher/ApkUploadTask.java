@@ -73,48 +73,61 @@ class ApkUploadTask extends TrackPublisherTask<Boolean> {
         logger.println(String.format("Uploading %d APK(s) with application ID: %s%n", apkFiles.size(), applicationId));
         final ArrayList<Integer> uploadedVersionCodes = new ArrayList<>();
         for (FilePath apkFile : apkFiles) {
-            final ApkMeta metadata = getApkMetadata(new File(apkFile.getRemote()));
-            final String apkSha1Hash = getSha1Hash(apkFile.getRemote());
-
-            // Log some useful information about the file that will be uploaded
-            logger.println(String.format("      APK file: %s", getRelativeFileName(apkFile)));
-            logger.println(String.format("    SHA-1 hash: %s", apkSha1Hash));
-            logger.println(String.format("   versionCode: %d", metadata.getVersionCode()));
-            logger.println(String.format(" minSdkVersion: %s", metadata.getMinSdkVersion()));
-
-            // Check whether this APK already exists on the server (i.e. uploading it would fail)
-            for (Apk apk : existingApks) {
-                if (apk.getBinary().getSha1().toLowerCase(Locale.ENGLISH).equals(apkSha1Hash)) {
-                    logger.println();
-                    logger.println("This APK already exists in the Google Play account; it cannot be uploaded again");
-                    return false;
+            int retryCount = 0;
+            while(retryCount<3){
+                try{
+                    final ApkMeta metadata = getApkMetadata(new File(apkFile.getRemote()));
+                    final String apkSha1Hash = getSha1Hash(apkFile.getRemote());
+        
+                    // Log some useful information about the file that will be uploaded
+                    logger.println(String.format("      APK file: %s", getRelativeFileName(apkFile)));
+                    logger.println(String.format("    SHA-1 hash: %s", apkSha1Hash));
+                    logger.println(String.format("   versionCode: %d", metadata.getVersionCode()));
+                    logger.println(String.format(" minSdkVersion: %s", metadata.getMinSdkVersion()));
+        
+                    // Check whether this APK already exists on the server (i.e. uploading it would fail)
+                    for (Apk apk : existingApks) {
+                        if (apk.getBinary().getSha1().toLowerCase(Locale.ENGLISH).equals(apkSha1Hash)) {
+                            logger.println();
+                            logger.println("This APK already exists in the Google Play account; it cannot be uploaded again");
+                            return false;
+                        }
+                    }
+        
+                    // If not, we can upload the file
+                    FileContent apk =
+                            new FileContent("application/vnd.android.package-archive", new File(apkFile.getRemote()));
+                    Apk uploadedApk = editService.apks().upload(applicationId, editId, apk).execute();
+                    uploadedVersionCodes.add(uploadedApk.getVersionCode());
+        
+                    // Upload the ProGuard mapping file for this APK, if there is one
+                    final FilePath mappingFile = apkFilesToMappingFiles.get(apkFile);
+                    if (mappingFile != null) {
+                        final String relativeFileName = getRelativeFileName(mappingFile);
+        
+                        // Google Play API doesn't accept empty mapping files
+                        logger.println(String.format(" Mapping file size: %s", mappingFile.length()));
+                        if (mappingFile.length() == 0) {
+                            logger.println(String.format(" Ignoring empty ProGuard mapping file: %s", relativeFileName));
+                        } else {
+                            logger.println(String.format(" Uploading associated ProGuard mapping file: %s", relativeFileName));
+                            FileContent mapping =
+                                    new FileContent("application/octet-stream", new File(mappingFile.getRemote()));
+                            editService.deobfuscationfiles().upload(applicationId, editId, uploadedApk.getVersionCode(),
+                                    DEOBFUSCATION_FILE_TYPE_PROGUARD, mapping).execute();
+                        }
+                    }
+                    logger.println("");
+                    break;
+                }catch(Exception e){
+                    logger.println(e.getMessage());
+                    retryCount++;
+                    if(retryCount<3)
+                        logger.println("Retrying... Iteration: "+(retryCount+1));
+                    else
+                        throw e;
                 }
             }
-
-            // If not, we can upload the file
-            FileContent apk =
-                    new FileContent("application/vnd.android.package-archive", new File(apkFile.getRemote()));
-            Apk uploadedApk = editService.apks().upload(applicationId, editId, apk).execute();
-            uploadedVersionCodes.add(uploadedApk.getVersionCode());
-
-            // Upload the ProGuard mapping file for this APK, if there is one
-            final FilePath mappingFile = apkFilesToMappingFiles.get(apkFile);
-            if (mappingFile != null) {
-                final String relativeFileName = getRelativeFileName(mappingFile);
-
-                // Google Play API doesn't accept empty mapping files
-                logger.println(String.format(" Mapping file size: %s", mappingFile.length()));
-                if (mappingFile.length() == 0) {
-                    logger.println(String.format(" Ignoring empty ProGuard mapping file: %s", relativeFileName));
-                } else {
-                    logger.println(String.format(" Uploading associated ProGuard mapping file: %s", relativeFileName));
-                    FileContent mapping =
-                            new FileContent("application/octet-stream", new File(mappingFile.getRemote()));
-                    editService.deobfuscationfiles().upload(applicationId, editId, uploadedApk.getVersionCode(),
-                            DEOBFUSCATION_FILE_TYPE_PROGUARD, mapping).execute();
-                }
-            }
-            logger.println("");
         }
 
         // Upload the expansion files, or associate the previous ones, if configured

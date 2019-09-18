@@ -17,7 +17,8 @@ import net.dongliu.apk.parser.ApkParsers;
 import net.dongliu.apk.parser.bean.ApkMeta;
 import org.jenkinsci.plugins.tokenmacro.MacroEvaluationException;
 import org.jenkinsci.plugins.tokenmacro.TokenMacro;
-
+import com.google.api.client.http.HttpRequestInitializer;
+import com.google.api.client.http.HttpRequest;
 import java.io.File;
 import java.io.IOException;
 import java.security.GeneralSecurityException;
@@ -123,8 +124,19 @@ public class Util {
             String pluginVersion) throws GeneralSecurityException {
         final Credential credential = credentials.getGoogleCredential(new AndroidPublisherScopeRequirement());
         return new AndroidPublisher.Builder(credential.getTransport(), credential.getJsonFactory(), credential)
-                .setApplicationName(getClientUserAgent(pluginVersion))
+                .setApplicationName(getClientUserAgent(pluginVersion)).setHttpRequestInitializer(setHttpTimeout(credential))
                 .build();
+    }
+
+    private static HttpRequestInitializer setHttpTimeout(final HttpRequestInitializer requestInitializer) {
+        return new HttpRequestInitializer() {
+            @Override
+            public void initialize(HttpRequest httpRequest) throws IOException {
+                requestInitializer.initialize(httpRequest);
+                httpRequest.setConnectTimeout(5 * 60000);  // 3 minutes connect timeout
+                httpRequest.setReadTimeout(5 * 60000);  // 3 minutes read timeout
+            }
+        };
     }
 
     /** @return The Google API "application name" that the plugin should identify as when sending requests. */
